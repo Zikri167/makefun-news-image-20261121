@@ -1,256 +1,294 @@
 #!/usr/bin/env python3
-"""Draw the front page for Saturday 21 November 2026.
+"""Draw the v2 front page: THE WORLD IN ONE DAY, Friday 21 November 2026.
 
-Renders a 1024x1024 broadsheet front page with Pillow and the Liberation
-fonts: masthead, date banner, two lead panels with shape pictograms, a
-grid of eight stories and an IN BRIEF strip. No network, no randomness,
-no timestamps in the output, so repeated runs are byte-identical.
+Build-time script (PIL). Produces entry.png next to this file; the judged
+program main.py only copies entry.png to /output. Design: v1 broadsheet
+kept, leads replaced with the full day's news (NATO Article 4 + AI rout),
+kickers on every headline, schematic Poland impact map, plunging market
+chart, big stat callouts, Rutte pull quote, LATE EDITION footer.
+Deterministic: no network, no randomness, no timestamps in the output.
 """
 import hashlib
+import math
 import os
 import sys
 
 from PIL import Image, ImageDraw, ImageFont
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-FONT_DIR = "/usr/share/fonts/truetype/liberation/"
+W = H = 1024
+M = 28
+RIGHT = W - M
 
-PAGE = 1024
-PAPER = (247, 245, 240)
-CARD = (255, 253, 247)
-INK = (17, 17, 17)
-MUTED = (96, 92, 80)
-RED = (178, 34, 34)
-NAVY = (27, 58, 88)
-STEEL = (120, 138, 158)
-FAINT = (205, 198, 180)
-BANNER = (27, 58, 88)
+BG = (246, 241, 226)
+PANEL = (253, 251, 245)
+INK = (24, 24, 24)
+GRAY = (92, 92, 92)
+FAINT = (196, 188, 168)
+GOLD = (176, 128, 10)
+NATO = (42, 75, 141)
+CRASH = (178, 34, 34)
+CRASH_SOFT = (238, 183, 175)
+TEAL = (0, 105, 105)
+PURPLE = (95, 60, 140)
 
-SERIF_B = "LiberationSerif-Bold.ttf"
-SERIF = "LiberationSerif-Regular.ttf"
-SANS_B = "LiberationSans-Bold.ttf"
-SANS = "LiberationSans-Regular.ttf"
-
-
-def load(name, size):
-    return ImageFont.truetype(FONT_DIR + name, size)
+FD = "/usr/share/fonts/truetype/dejavu/"
+SERIF_B = FD + "DejaVuSerif-Bold.ttf"
+SERIF = FD + "DejaVuSerif.ttf"
+SANS_B = FD + "DejaVuSans-Bold.ttf"
+SANS = FD + "DejaVuSans.ttf"
 
 
-def wrap(draw, text, font, width):
-    """Split text into lines that fit width, word by word."""
-    lines = []
-    for chunk in text.split("\n"):
-        words = chunk.split()
-        if not words:
-            lines.append("")
-            continue
-        current = words[0]
-        for word in words[1:]:
-            trial = current + " " + word
-            if draw.textlength(trial, font=font) <= width:
-                current = trial
-            else:
-                lines.append(current)
-                current = word
-        lines.append(current)
+def F(path, size):
+    return ImageFont.truetype(path, size)
+
+
+img = Image.new("RGB", (W, H), BG)
+d = ImageDraw.Draw(img)
+
+
+def tw(text, font):
+    return d.textlength(text, font=font)
+
+
+def wrap(text, font, maxw):
+    lines, cur = [], ""
+    for word in text.split():
+        trial = (cur + " " + word).strip()
+        if tw(trial, font) <= maxw or not cur:
+            cur = trial
+        else:
+            lines.append(cur)
+            cur = word
+    if cur:
+        lines.append(cur)
     return lines
 
 
-def block(draw, x, y, text, font, fill, width, max_lines, leading):
-    """Draw wrapped text; return the y just below the last line."""
-    lines = wrap(draw, text, font, width)[:max_lines]
+def block(x, y, text, font, maxw, leading, fill=INK, max_lines=None):
+    lines = wrap(text, font, maxw)
+    if max_lines:
+        lines = lines[:max_lines]
     for line in lines:
-        draw.text((x, y), line, font=font, fill=fill)
+        d.text((x, y), line, font=font, fill=fill)
         y += leading
     return y
 
 
-def radar(draw, box):
-    """Concentric sweep rings, a short incoming trajectory, an impact star."""
-    x0, y0, x1, y1 = box
-    cx = (x0 + x1) // 2
-    cy = (y0 + y1) // 2
-    radius = min(x1 - x0, y1 - y0) // 2 - 6
-    for step in range(3):
-        r = radius - step * radius // 3
-        draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=STEEL, width=2)
-    tip_x, tip_y = cx + radius // 2, cy - radius // 2
-    draw.line([x0 + 10, y0 + 8, tip_x, tip_y], fill=RED, width=3)
-    draw.polygon(
-        [(tip_x, tip_y), (tip_x - 12, tip_y - 2), (tip_x - 4, tip_y + 10)],
-        fill=RED,
-    )
-    ix, iy = cx - radius // 2, cy + radius // 2
-    for dx, dy in ((-13, 0), (13, 0), (0, -13), (0, 13), (-9, -9), (9, 9),
-                   (-9, 9), (9, -9)):
-        draw.line([ix, iy, ix + dx, iy + dy], fill=RED, width=2)
-    draw.ellipse([ix - 4, iy - 4, ix + 4, iy + 4], fill=RED)
+def rule(y, color=GOLD, width=2):
+    d.line([(M, y), (RIGHT, y)], fill=color, width=width)
 
 
-def chart(draw, box):
-    """Two numeric callouts above a stepped market decline."""
-    x0, y0, x1, y1 = box
-    draw.text((x0 + 6, y0), "NASDAQ  -5.28%",
-              font=load(SANS_B, 24), fill=RED)
-    right_text = "NVIDIA  -14%"
-    rw = draw.textlength(right_text, font=load(SANS_B, 24))
-    draw.text((x1 - rw - 4, y0), right_text,
-              font=load(SANS_B, 24), fill=RED)
-    top = y0 + 34
-    base = y1 - 6
-    draw.line([x0 + 6, top, x0 + 6, base], fill=STEEL, width=2)
-    draw.line([x0 + 6, base, x1 - 6, base], fill=STEEL, width=2)
-    pts = []
-    w = (x1 - x0 - 24) // 5
-    for i, drop in enumerate((0, 1, 1, 2, 3, 4)):
-        px = x0 + 10 + i * w
-        py = top + 4 + drop * (base - top - 12) // 4
-        pts.append((px, py))
-    for i in range(len(pts) - 1):
-        draw.line([pts[i][0], pts[i][1], pts[i + 1][0], pts[i][1]],
-                  fill=RED, width=3)
-        draw.line([pts[i + 1][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]],
-                  fill=RED, width=3)
-    for px, py in pts[1:]:
-        draw.ellipse([px - 4, py - 4, px + 4, py + 4], fill=RED)
+def kicker_bar(x, y, w, color, text):
+    d.rectangle([x, y, x + w, y + 27], fill=color)
+    d.text((x + 10, y + 5), text, font=F(SANS_B, 15), fill=(255, 255, 255))
+    return y + 27
 
 
-LEADS = [
-    {
-        "kicker": "POLAND  ·  NATO",
-        "headline": "Russian missiles land in Poland",
-        "summary": ("Two missiles and a drone crash in the south-east during a "
-                    "huge barrage on Ukraine. PM Tusk calls it a deliberate "
-                    "provocation; NATO chief Rutte calls it a grave violation "
-                    "and visits Warsaw today."),
-        "art": radar,
-    },
-    {
-        "kicker": "MARKETS",
-        "headline": "Wall Street rout as AI sell-off deepens",
-        "summary": ("The S&P 500 and Dow enter correction; the Nasdaq falls "
-                    "5.28% and Nvidia drops 14%. Tokyo's Nikkei slides "
-                    "5.06% and gold falls about 4%."),
-        "art": chart,
-    },
-]
+# ---------------------------------------------------------------- masthead
+f_title = F(SERIF_B, 53)
+title = "THE WORLD IN ONE DAY"
+d.text(((W - tw(title, f_title)) / 2, 12), title, font=f_title, fill=INK)
+rule(82, GOLD, 3)
+rule(88, INK, 1)
+f_date = F(SANS_B, 16)
+d.text((M, 96), "FRIDAY, 21 NOVEMBER 2026", font=f_date, fill=INK)
+mid = "ALL THE DAY'S NEWS ON ONE PAGE"
+f_mid = F(SANS, 13)
+d.text(((W - tw(mid, f_mid)) / 2, 98), mid, font=f_mid, fill=GRAY)
+late = "LATE EDITION"
+d.text((RIGHT - tw(late, f_date), 96), late, font=f_date, fill=CRASH)
+rule(122, INK, 1)
+
+# ---------------------------------------------------------------- lead one
+LX, LW = M, 470
+RX = 526
+TOP = 134
+d.line([(512, TOP), (512, 660)], fill=FAINT, width=1)
+
+y = kicker_bar(LX, TOP, LW, NATO, "NATO ALERT - ARTICLE 4 INVOKED")
+f_head = F(SANS_B, 37)
+y = block(LX, y + 8, "RUSSIAN MISSILES FALL ON POLAND", f_head, LW, 41)
+f_deck = F(SERIF, 18)
+y = block(LX, y + 3, "Warsaw triggers NATO's Article 4 after the heaviest "
+          "Russian strike of November", f_deck, LW, 22, fill=(60, 60, 60))
+
+# schematic map of Poland with three impact points in the south-east
+MAP_Y, MAP_H = 306, 190
+d.rectangle([LX, MAP_Y, LX + LW, MAP_Y + MAP_H], fill=PANEL, outline=INK,
+            width=1)
+poly = [(70, 66), (150, 34), (252, 22), (348, 44), (414, 92), (428, 150),
+        (382, 182), (286, 190), (188, 178), (112, 150), (58, 112)]
+pts = [(LX + 16 + px * 0.98, MAP_Y + 6 + py) for px, py in poly]
+d.polygon(pts, fill=(232, 236, 240), outline=NATO)
+d.text((LX + 120, MAP_Y + 84), "POLAND", font=F(SANS_B, 17), fill=NATO)
+d.text((LX + 414, MAP_Y + 138), "UKRAINE", font=F(SANS, 11), fill=GRAY)
+# compass
+cx, cy = LX + 40, MAP_Y + 30
+d.ellipse([cx - 13, cy - 13, cx + 13, cy + 13], outline=INK, width=1)
+d.polygon([(cx, cy - 11), (cx - 4, cy + 2), (cx + 4, cy + 2)], fill=CRASH)
+d.text((cx - 4, cy - 26), "N", font=F(SANS_B, 11), fill=INK)
+# invasion arrow from the east
+ay = MAP_Y + 96
+d.line([(LX + LW - 4, ay), (LX + 372, ay)], fill=CRASH, width=3)
+d.polygon([(LX + 372, ay), (LX + 388, ay - 6), (LX + 388, ay + 6)],
+          fill=CRASH)
+impacts = [(LX + 356, MAP_Y + 128), (LX + 392, MAP_Y + 148),
+           (LX + 330, MAP_Y + 156)]
+for ix, iy in impacts:
+    d.ellipse([ix - 15, iy - 15, ix + 15, iy + 15], outline=CRASH, width=1)
+    star = []
+    for k in range(16):
+        r = 8 if k % 2 == 0 else 3
+        a = math.pi * k / 8
+        star.append((ix + r * math.cos(a), iy + r * math.sin(a)))
+    d.polygon(star, fill=CRASH)
+f_lab = F(SANS, 11)
+d.text((LX + 238, MAP_Y + 108), "Nowy Lipowiec", font=f_lab, fill=INK)
+d.text((LX + 352, MAP_Y + 170), "Rudnik n. Sanem", font=f_lab, fill=INK)
+d.text((LX + 196, MAP_Y + 150), "Molodycz", font=f_lab, fill=INK)
+d.text((LX + 10, MAP_Y + MAP_H - 18),
+       "Three impacts in the south-east - no casualties",
+       font=F(SANS, 12), fill=GRAY)
+
+# stat callout + Rutte pull quote
+SY = 504
+d.text((LX, SY), "515", font=F(SANS_B, 56), fill=CRASH)
+qx = LX + 128
+d.text((qx, SY + 2), "\u201cA grave violation\u201d", font=F(SERIF, 20),
+       fill=NATO)
+d.text((qx, SY + 30), "of allied airspace", font=F(SERIF, 20), fill=NATO)
+d.text((qx, SY + 56), "- Mark Rutte, NATO Secretary General,",
+       font=F(SANS, 12), fill=GRAY)
+d.text((qx, SY + 71), "flying into Warsaw on Saturday",
+       font=F(SANS, 12), fill=GRAY)
+f_body = F(SANS, 15)
+block(LX, 592, "One night, 515 weapons - 27 ballistic, 84 cruise, "
+      "404 drones. Kyiv bridge destroyed; eight killed, 28 wounded. "
+      "Tusk: deliberate provocation. Poland seeks AWACS and F-35 jets.",
+      f_body, LW, 17, max_lines=4)
+
+# ---------------------------------------------------------------- lead two
+y = kicker_bar(RX, TOP, LW, CRASH, "MARKETS CRASH - AI ROUT DEEPENS")
+y = block(RX, y + 8, "AI ROUT ERASES 2026 STOCK GAINS", f_head, LW, 41)
+y = block(RX, y + 3, "The Nasdaq's worst point plunge in years closes a "
+          "brutal week for technology shares", f_deck, LW, 22,
+          fill=(60, 60, 60))
+
+CH_Y, CH_H = 306, 190
+d.rectangle([RX, CH_Y, RX + LW, CH_Y + CH_H], fill=PANEL, outline=INK,
+            width=1)
+d.text((RX + 12, CH_Y + 8), "NASDAQ COMPOSITE - ONE DAY",
+       font=F(SANS_B, 12), fill=GRAY)
+curve = [(RX + 18, CH_Y + 52), (RX + 90, CH_Y + 44), (RX + 150, CH_Y + 66),
+         (RX + 205, CH_Y + 58), (RX + 262, CH_Y + 96),
+         (RX + 320, CH_Y + 88), (RX + 378, CH_Y + 132),
+         (RX + 448, CH_Y + 168)]
+d.polygon(curve + [(RX + 448, CH_Y + CH_H - 8), (RX + 18, CH_Y + CH_H - 8)],
+          fill=CRASH_SOFT)
+d.line(curve, fill=CRASH, width=4)
+ex, ey = curve[-1]
+d.ellipse([ex - 6, ey - 6, ex + 6, ey + 6], fill=CRASH)
+d.text((RX + 300, CH_Y + 150), "\u25bc 1,261 pts", font=F(SANS_B, 17),
+       fill=CRASH)
+d.text((RX + 12, CH_Y + CH_H - 20), "Second-biggest point drop on record",
+       font=F(SANS, 12), fill=GRAY)
+
+d.text((RX, SY), "-5.28%", font=F(SANS_B, 56), fill=CRASH)
+qx = RX + 226
+d.text((qx, SY + 2), "The Nasdaq's one-day fall.", font=F(SERIF, 16),
+       fill=INK)
+d.text((qx, SY + 26), "Nvidia -14%, Broadcom -12.2%,", font=F(SERIF, 16),
+       fill=INK)
+d.text((qx, SY + 50), "Micron -13.9%, AMD -13.2%", font=F(SERIF, 16),
+       fill=INK)
+block(RX, 592, "Nvidia hit a 52-week low as the SEC reviews its books; "
+      "$2.7 trillion gone since the peak. Anthropic slid 8.5% a day "
+      "after history's biggest IPO. S&P 500 in correction (-11.6%); "
+      "VIX closed at 35.89.", f_body, LW, 17, max_lines=4)
+
+
+# ---------------------------------------------------------------- grid
+d.text((M, 666), "THE DAY IN EIGHT STORIES", font=F(SANS_B, 16), fill=NATO)
+rule(686, GOLD, 2)
 
 GRID = [
-    ("THE HAGUE", "World Court: Myanmar committed genocide",
-     "ICJ rules 9-6 over the Rohingya; a first for a state."),
-    ("SHENZHEN", "Summit ends with little to show",
-     "Joint declaration issued, few concrete results."),
-    ("MEDICINE", "Pill hailed as cancer breakthrough",
-     "Tumours stop growing in nearly all patients."),
-    ("INDIA", "Cyclone Akvan hits Odisha coast",
-     "Storm crosses near Gopalpur; 300,000 evacuated."),
-    ("BRUSSELS", "UK and EU sign three deals",
-     "Food trade, carbon markets, youth mobility."),
-    ("RIYADH", "Houthi missiles intercepted",
-     "Three ballistic missiles downed; Hodeidah struck."),
-    ("CLIMATE", "COP31 enters final stretch",
-     "Fossil-fuel wording split as talks near a deal."),
-    ("COPENHAGEN", "Denmark foils Russian plot",
-     "Plan to kill rapper Kyivstoner was stopped."),
+    ("WORLD", NATO, "TRUMP DELAYS IRAN STRIKE CALL TO 2027",
+     "\u201cWe've got time.\u201d War cost $48.3B; four tankers hit in "
+     "Hormuz in 96 hours."),
+    ("WORLD", NATO, "ICJ MYANMAR RULING RIPPLES OUTWARD",
+     "Britain expels a Myanmar diplomat; Gaza case vs Israel may gain "
+     "weight."),
+    ("EUROPE", TEAL, "UK AND EU SEAL LANDMARK RESET DEAL",
+     "London and Brussels agree to rebuild ties a decade after Brexit."),
+    ("WORLD", NATO, "US, CHINA, RUSSIA IN SHENZHEN PACT",
+     "Xi and Putin's joint declaration takes aim at the ICC in The "
+     "Hague."),
+    ("WAR", CRASH, "EU ADDS \u20ac1BN FOR UKRAINE'S SKIES",
+     "Extra drones and air defence pledged; Britain sends 1,000+ "
+     "long-range drones."),
+    ("WAR", CRASH, "UKRAINE HITS RUSSIAN LAUNCHERS",
+     "Three missile launchers destroyed; HIMARS strike on 810th "
+     "Brigade HQ, Sumy."),
+    ("TECH", PURPLE, "TRUMP: NO AI DATA CENTRES ABROAD?",
+     "Threat to bar US firms building AI sites overseas rattles the "
+     "sector."),
+    ("TECH", PURPLE, "ANTHROPIC 'SOLVES' MATH PROBLEM",
+     "Lab claims the year's biggest open maths problem on its worst "
+     "day."),
 ]
 
+GY = 694
+CELL_W, CELL_H, GAP = 234, 108, 10
+f_tab = F(SANS_B, 10)
+f_ghead = F(SANS_B, 16)
+f_gsub = F(SANS, 12)
+for i, (tab, color, head, sub) in enumerate(GRID):
+    col, row = i % 4, i // 4
+    x = M + col * (CELL_W + GAP)
+    yy = GY + row * (CELL_H + 8)
+    tabw = tw(tab, f_tab) + 14
+    d.rectangle([x, yy, x + tabw, yy + 17], fill=color)
+    d.text((x + 7, yy + 3), tab, font=f_tab, fill=(255, 255, 255))
+    hy = block(x, yy + 23, head, f_ghead, CELL_W, 19, max_lines=2)
+    block(x, hy + 3, sub, f_gsub, CELL_W, 14, fill=(60, 60, 60),
+          max_lines=3)
+
+# ---------------------------------------------------------------- in brief
+BY = 926
+d.text((M, BY), "IN BRIEF", font=F(SANS_B, 15), fill=NATO)
+d.line([(M + 74, BY + 8), (RIGHT, BY + 8)], fill=FAINT, width=1)
 BRIEFS = [
-    "Trump urges Nvidia to bring back Huang; board says no.",
-    "Trump pardons baseball star Pete Rose posthumously.",
-    "Senate rejects the Iran war-powers resolution, 51-48.",
-    "US approves nearly 880,000 AI chip sales to China.",
-    "Webb and Gemini North find the oldest close quasar pair.",
-    "Gold hits a 14-month low, down 9.4% on the week.",
+    "US releases Middle East UFO footage",
+    "Denmark: Russia plotted rapper killing",
+    "California eyes AI kill-switch powers",
+    "Mamdani to close Rikers Island by 2032",
+    "UN cuts food aid target for 2027",
+    "Climate priorities set before COP31",
 ]
+BW = 154
+f_brief = F(SANS, 12)
+for i, item in enumerate(BRIEFS):
+    x = M + i * (BW + 8)
+    if i % 2 == 0:
+        d.rectangle([x - 4, BY + 24, x + BW, BY + 62], fill=(240, 234, 216))
+    d.polygon([(x + 1, BY + 30), (x + 1, BY + 38), (x + 8, BY + 34)],
+              fill=CRASH)
+    block(x + 13, BY + 26, item, f_brief, BW - 14, 15, max_lines=2)
 
-
-def draw_page():
-    img = Image.new("RGB", (PAGE, PAGE), PAPER)
-    d = ImageDraw.Draw(img)
-    margin = 30
-    right = PAGE - margin
-
-    # Masthead.
-    title = "THE WORLD IN ONE DAY"
-    title_font = load(SERIF_B, 56)
-    tw = d.textlength(title, font=title_font)
-    d.text(((PAGE - tw) / 2, 24), title, font=title_font, fill=INK)
-    d.line([margin, 92, right, 92], fill=INK, width=2)
-
-    # Date banner.
-    d.rectangle([margin, 102, right, 140], fill=BANNER)
-    date_font = load(SANS_B, 27)
-    date = "SATURDAY 21 NOVEMBER 2026"
-    dw = d.textlength(date, font=date_font)
-    d.text(((PAGE - dw) / 2, 108), date, font=date_font, fill=(255, 255, 255))
-    d.line([margin, 148, right, 148], fill=RED, width=3)
-
-    # Lead panels.
-    top = 160
-    height = 330
-    gap = 20
-    width = (right - margin - gap) // 2
-    for i, lead in enumerate(LEADS):
-        x = margin + i * (width + gap)
-        d.rectangle([x, top, x + width, top + height], fill=CARD,
-                    outline=FAINT, width=1)
-        inner = x + 16
-        iw = width - 32
-        y = top + 14
-        d.text((inner, y), lead["kicker"], font=load(SANS_B, 19), fill=RED)
-        y += 30
-        y = block(d, inner, y, lead["headline"], load(SERIF_B, 38), INK,
-                  iw, 2, 44)
-        y += 6
-        art_top = y
-        art_bottom = top + height - 116
-        lead["art"](d, (inner, art_top, x + width - 16, art_bottom))
-        y = art_bottom + 8
-        block(d, inner, y, lead["summary"], load(SANS, 20), INK, iw, 4, 25)
-
-    # Section label.
-    y = 506
-    d.text((margin, y), "MORE OF THE DAY", font=load(SANS_B, 20), fill=NAVY)
-    d.line([margin + 168, y + 12, right, y + 12], fill=FAINT, width=1)
-
-    # Story grid: two columns, four rows.
-    gy = 536
-    cell_w = (right - margin - gap) // 2
-    cell_h = 76
-    for i, (kicker, headline, summary) in enumerate(GRID):
-        col = i % 2
-        row = i // 2
-        x = margin + col * (cell_w + gap)
-        cy = gy + row * (cell_h + 4)
-        d.text((x, cy), kicker, font=load(SANS_B, 16), fill=RED)
-        block(d, x, cy + 20, headline, load(SERIF_B, 23), INK, cell_w, 1, 27)
-        block(d, x, cy + 48, summary, load(SANS, 17), MUTED, cell_w, 1, 20)
-
-    # IN BRIEF strip.
-    by = 856
-    d.line([margin, by, right, by], fill=INK, width=2)
-    d.text((margin, by + 10), "IN BRIEF", font=load(SANS_B, 19), fill=NAVY)
-    rows = 3
-    for i, item in enumerate(BRIEFS):
-        col = i % 2
-        row = i // 2
-        x = margin + col * (cell_w + gap)
-        yy = by + 38 + row * 26
-        d.text((x, yy), "■  " + item, font=load(SANS, 18), fill=INK)
-
-    # Footer.
-    foot = ("All stories as reported on Saturday 21 November 2026  ·  "
-            "Sources: AP, Reuters, BBC, The Guardian, PBS")
-    foot_font = load(SANS, 15)
-    fw = d.textlength(foot, font=foot_font)
-    d.text(((PAGE - fw) / 2, 988), foot, font=foot_font, fill=MUTED)
-    return img
+# ---------------------------------------------------------------- footer
+rule(990, INK, 1)
+d.text((M, 996), "LATE EDITION", font=F(SANS_B, 14), fill=CRASH)
+foot = "ONE PAGE - EVERY STORY THAT MATTERED"
+f_foot = F(SANS, 11)
+d.text(((W - tw(foot, f_foot)) / 2, 998), foot, font=f_foot, fill=GRAY)
+vol = "VOL CXII - NO 312"
+d.text((RIGHT - tw(vol, f_foot), 998), vol, font=f_foot, fill=GRAY)
 
 
 def main():
     out_path = os.path.join(HERE, "entry.png")
-    page = draw_page()
-    page.save(out_path, format="PNG", optimize=True)
+    img.save(out_path, format="PNG", optimize=True)
     data = open(out_path, "rb").read()
     print("wrote %s %d bytes sha256 %s" % (
         out_path, len(data), hashlib.sha256(data).hexdigest()))
